@@ -1,0 +1,25 @@
+This is simple example showing how to analyse the data. It makes some histograms
+showing correlations between geant and Digitized data, and also results of Vector
+Finder execution.
+
+Usage:
+=============================
+
+1. Preapre hydra (ROOTSYS and HADDIR)
+
+2. Compile and install
+
+    make
+    make install
+
+3. Go to sublevel directory
+
+    cd ..
+
+4. Run application on the dst file, e.g. (see ../ana/README)
+
+    ./drawhists mydstfile_dst.root
+
+5. Output will be stored to
+
+    output.root

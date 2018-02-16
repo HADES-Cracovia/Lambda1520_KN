@@ -1,0 +1,517 @@
+#include "fwdet_res.h"
+
+#include "hgeantfwdet.h"
+#include "fwdetdef.h"
+#include "hfwdetstrawcalsim.h"
+#include "hvectorcand.h"
+#include "hvectorcandsim.h"
+#include "hparticlecandsim.h"
+#include "hparticlecand.h"
+#include "hparticletool.h"
+
+#include <TCanvas.h>
+#include <TStyle.h>
+
+#define PR(x) std::cout << "++DEBUG: " << #x << " = |" << x << "| (" << __FILE__ << ", " << __LINE__ << ")\n";
+
+using namespace std;
+
+
+HGeomVector calcPrimVertex_Track_Mother(const std::vector<HParticleCand *>cands, const HGeomVector & DecayVertex, const HGeomVector & dirMother, int trackA_num, int trackB_num);
+HGeomVector calcPrimVertex_Track_Mother(const std::vector<HParticleCand *>cands, const HGeomVector & beamVector, const HGeomVector & DecayVertex, const HGeomVector & dirMother, int trackA_num, int trackB_num);
+
+Int_t fwdet_tests(HLoop * loop, const AnaParameters & anapars)
+{
+    if (!loop->setInput(""))
+    {                                                    // reading file structure
+        std::cerr << "READBACK: ERROR : cannot read input !" << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
+    gStyle->SetOptStat(1);
+    gStyle->SetOptFit(1);
+
+    TStopwatch timer;
+    timer.Reset();
+    timer.Start();
+
+    //////////////////////////////////////////////////////////////////////////////
+    //      Fast tree builder for creating of ntuples                            //
+    //////////////////////////////////////////////////////////////////////////////
+
+    loop->printCategories();    // print all categories found in input + status
+
+    HCategory * fCatGeantKine = nullptr;
+    fCatGeantKine = HCategoryManager::getCategory(catGeantKine, kTRUE, "catGeantKine");
+    if (!fCatGeantKine)
+    {
+        cout << "No catGeantKine!" << endl;
+        exit(EXIT_FAILURE);  // do you want a brute force exit ?
+    }
+
+    HCategory * fFwDetStrawCal = nullptr;
+    fFwDetStrawCal = HCategoryManager::getCategory(catFwDetStrawCal, kTRUE, "catFwDetStrawCalSim");
+    if (!fFwDetStrawCal)
+    {
+        cout << "No catFwDetStrawCal!" << endl;
+        exit(EXIT_FAILURE);  // do you want a brute force exit ?
+    }
+
+    HCategory * fCatVectorCandSim = nullptr;
+    fCatVectorCandSim = HCategoryManager::getCategory(catVectorCand, kTRUE, "catVectorCand");
+    if (!fCatVectorCandSim)
+    {
+        cout << "No catVectorCand!" << endl;
+	//exit(EXIT_FAILURE);  // do you want a brute force exit ?
+    }
+
+    HCategory * fCatParticleCandSim= nullptr;
+    fCatParticleCandSim = HCategoryManager::getCategory(catParticleCand, kTRUE, "catParticleCand");
+    if(!fCatParticleCandSim)
+      {
+	cout<< "No catParticleCandSim!"<<endl;
+      }
+
+    Int_t entries = loop->getEntries();
+    //     //setting numbers of events regarding the input number of events by the user
+    if (anapars.events < entries and anapars.events >= 0 ) entries = anapars.events;
+
+    //     // specify output file
+    TFile * output_file = TFile::Open(anapars.outfile, "RECREATE");
+    output_file->cd();
+    //
+    cout << "NEW ROOT TREE " << endl;
+    //
+    //crete histograms
+    TCanvas* cFirstCut= new TCanvas("cFirstCut","Differences betwween primary and seconndary tracks");
+    TH1F* hFTNumber=new TH1F("hFTNumber","Track number for all particles",100,0,100);
+    TH1F* hFZVertexAll= new TH1F("hFZVertexAll","Z cooridnate for all primary vertexes, taken from GeantKine",1000,1,-1);
+    TH1F* hFCreationNo= new TH1F("hFCreationNo","GEANT creation mechanism number",15,0,15);
+    TH1F* hFparticleID= new TH1F("hFparticleID","Particle ID for primary particles",20,0,20);
+    
+    
+    TCanvas* cMomentumDistr = new TCanvas("cMomentumDistr","Momentum distribution");
+    TH1F* hMomPhiFW= new TH1F("hMomPhiFW","Phi-coordinate for momentum recorded in FW",100,1,-1);
+    TH1F* hMomThetaFW= new TH1F("hMomThetaFW","Theta-coordinate for momentum recorded in FW",100,1,-1);
+    TH1F* hMomPhiH= new TH1F("hMomPhiH","Phi-coordinate for momentum recorded in HADES",100,1,-1);
+    TH1F* hMomThetaH= new TH1F("hMomThetaH","Theta-coordinate for momentum recorded in HADES",100,1,-1);
+
+    TCanvas* cDistance= new TCanvas("cDistance","Distance between tracks from simulation");
+    TH1F* hDistanceAll= new TH1F("hDistanceAll","Distance between all tracks",500,1,-1);
+    TH1F* hDistanceCut= new TH1F("hDistanceCut","Distance between tracks after cut",40,1,-1);
+    TH1F* hDistanceMassCut= new TH1F("hDistanceMassCut","Distance between tracks after cut for lambda mass",20,1,-1);
+    
+    TCanvas* cVertex=new TCanvas("cVertex","Vertex coordinates");
+    TH1F* hVerZ=new TH1F("hVerZ","Z-coordinate of vetex",1000,1,-1);
+    TH1F* hVerZmassCut=new TH1F("hVerZmassCut","Z-coordinate of vetex after mass cut",400,1,-1);
+    TH2F* hVerZR=new TH2F("hVerZR","Z-R coordinate of vertex for every two tracks;z[mm];r[mm]",1000,1,-1,200,1,-1);
+    TH2F* hVerZRpionH=new TH2F("hVerZRpionH","Z-R coordinate of vertex for two tracks, Pi- in HADES;z[mm];r[mm]",1000,1,-1,200,1,-1);
+    TH2F* hVerZRpionHKineFW=new TH2F("hVerZRpionHKineFW","Z-R coordinate of vertex for two tracks, Pi- in HADES, data from kine for FW;z[mm];r[mm]",100,1,-1,100,1,-1);
+    TH2F* hVerZRpionHKineHADES=new TH2F("hVerZRpionHKineHADES","Z-R coordinate of vertex for two tracks, Pi- in HADES, data from kine for FW;z[mm];r[mm]",100,1,-1,100,1,-1);
+    
+    TCanvas* cMass=new TCanvas("cMass","invariant mass");
+    TH1F* hMasSum=new TH1F("hMasSum","Invariant mass spektrum",500,700,2000);
+
+    TCanvas* cKine= new TCanvas("cKine", "info from HGeantKine category");
+    TH1F* hPionTheta=new TH1F("hPionTeta","Theta angle distribution for pions",1000,1,-1);
+    TH1F* hProtonTheta=new TH1F("hProtonTeta","Theta angle distribution for protons",1000,1,-1);
+    TH1F* hPId=new TH1F("hPId","Particles ID",30,0,30);
+    TH2F* hKinePionThetaP= new TH2F("hKinePionThetaP","Theta-momentum distribution for pions",200,1,-1,200,1,-1);
+    TH2F* hKineProtonThetaP= new TH2F("hKineProtonThetaP","Theta-momentum distribution for protons",200,1,-1,200,1,-1);
+    TH2F* hKineVertexZRproton=new TH2F("hKineVertexZRproton","Z-R coordinate of vertex for protons;z[mm];r[mm]",4000,1,-1,400,1,-1);
+    TH2F* hKineVertexZRpion=new TH2F("hKineVertexZRpion","Z-R coordinate of vertex for pions;z[mm];r[mm]",7000,0,7000,2500,0,2500);
+    TH2F* hKineVertexZRkaon=new TH2F("hKineVertexZRkaon","Z-R coordinate of vertex for kaons;z[mm];r[mm]",4000,1,-1,400,1,-1);
+    
+    TCanvas* cHADES= new TCanvas("cHADES","About particles from ParticleCandSim");
+    TH1F* hHPId=new TH1F("hHPId","Particles ID",100,1,-1);
+    TH2F* hHPionThetaP= new TH2F("hHPionThetaP","Theta-momentum distribution for pions",200,1,-1,200,0,12000);
+    TH2F* hHProtonThetaP= new TH2F("hHProtonThetaP","Theta-momentum distribution for protons",200,0,100,200,0,20000);
+    TH2F* hHVertex= new TH2F("hHVertex","Vertex distrbution for data from HADES, taken from HGeantKine only for Pi-",7000,0,7000,2500,0,2500);
+
+    TCanvas* cFW= new TCanvas("cFW","About particles from ParticleCandSim");
+    TH1F* hFWPId=new TH1F("hFWPId","Particles ID",100,1,-1);
+    TH2F* hFWPionThetaP= new TH2F("hFWPionThetaP","Theta-momentum distribution for pions",200,1,-1,200,1,-1);
+    TH2F* hFWProtonThetaP= new TH2F("hFWProtonThetaP","Theta-momentum distribution for protons",200,1,-1,200,1,-1);
+    TH1F* hFWProtonTheta= new TH1F("hFWProtonTheta","Theta distribution for proton i FW",500,1,-1);
+
+    TCanvas* cComp= new TCanvas("cComp","comparison etween Pi vertexes");
+
+    TCanvas* cDistancePrimary= new TCanvas("cDistancePrimary","Distance between tracks only for particles from primary xertex");
+    TH1F* hPrimVecCreationID=new TH1F("hPrimVecCreationID","Creation ID for particles in FW",17,-2,15); 
+    TH1F* hPrimParParentTrNo=new TH1F("hPrimParParentTrNo","Parent track no for Hades",50,0,50);
+    TH1F* hPrimVecID=new TH1F("hPrimVecID","particle ID for FW for Creation ID=0",20,0,20);
+    TH1F* hPrimParID=new TH1F("hPrimParID","particle ID for HADES for Creation ID=0",20,0,20);
+    TH1F* hPrimVertexZ= new TH1F("hPrimVertexZ","z coordinate for particles from primary vertex",1000,-1000,1000);
+
+    TCanvas* cKineMass=new TCanvas("cKineMass","Mass of products taken fron kine");
+    TH1F* hKMFWres=new TH1F("hKMFWres","Difference between mass reconstructed in FW and simulateds for proton",1000,1,-1); 
+    TH1F* hKMHres=new TH1F("hKMHres","Mass spectrum in HADES, data taken from particlecand",1000,1,-1);
+    TH1F* 
+    TH1F* hKMFWresAll=new TH1F("hKMFWresAll","Difference between mass reconstructed in FW and simulated, assumed proton mass",1000,1,-1);
+    //event loop *************************************************
+    //*********************************************************
+    for (Int_t i = 0; i < entries; i++)                   
+    {
+        loop->nextEvent(i);         // get next event. categories will be cleared before
+        if(i%5000==0)
+	  cout<<"event no. "<<i<<endl;
+        HParticleCandSim* particlecand =nullptr;
+       	HVectorCandSim* fwdetstrawvec = nullptr;
+	HGeantKine* hkine=nullptr;
+	HParticleTool particle_tool;
+ 	//vector candidate reconstraction
+	Int_t vcnt=0;
+	Int_t pcnt=0;
+	Int_t gknt=0;
+
+	//FW Detector
+	if (fCatVectorCandSim)
+	  {
+	    vcnt = fCatVectorCandSim->getEntries();
+	    gknt = fCatGeantKine->getEntries();
+	    for (int j = 0; j < vcnt; ++j)
+	      {
+                fwdetstrawvec = HCategoryManager::getObject(fwdetstrawvec, fCatVectorCandSim, j);
+		Int_t vectorcandID=-1;
+		Int_t vectorcandTID=fwdetstrawvec->getTrack();
+		for(int k=0;k<gknt;k++)//find fitting vector form kine
+		  {
+		    hkine = HCategoryManager::getObject(hkine, fCatGeantKine,k);
+		    if(vectorcandTID==hkine->getTrack())
+		      {
+			vectorcandID=hkine->getID();
+			break;
+		      }
+		  }
+		//fwdetstrawvec->calc4vectorProperties(938); //co to robii!!!!! bo duzo psuje
+		
+		hMomPhiFW->Fill(fwdetstrawvec->Phi());
+		hMomThetaFW->Fill(fwdetstrawvec->Theta());
+		hFWPId->Fill(vectorcandID);		
+		hKMFWresAll->Fill(fwdetstrawvec->M());
+		if(vectorcandID==14)//proton
+		  {
+		    hFWProtonThetaP->Fill(fwdetstrawvec->Theta(),fwdetstrawvec->Mag());
+		    hFWProtonTheta->Fill(fwdetstrawvec->Theta()*180/TMath::Pi());
+		    hKMFWres->Fill(fwdetstrawvec->M()-938);
+		  }
+		if(vectorcandID==9)//Pi-
+		  {
+		    hFWPionThetaP->Fill(fwdetstrawvec->Theta(),fwdetstrawvec->Mag());
+		  }
+	      }
+	  }
+
+	//HADES
+	if(fCatParticleCandSim)
+	  {
+	    pcnt=fCatParticleCandSim->getEntries();
+	    for(int i=0;i<pcnt;i++)
+	      {
+		particlecand = HCategoryManager::getObject(particlecand, fCatParticleCandSim,i);
+		Int_t particlecandID=particlecand->getGeantPID();
+		
+		hMomPhiH->Fill(particlecand->getPhi()/180*TMath::Pi());
+		hMomThetaH->Fill(particlecand->getTheta()/180*TMath::Pi());
+		hHPId->Fill(particlecandID);
+		hKMHres->Fill(particlecand->getMass());
+		//hHVertex->Fill(particlecand->getGeantzVertex(),TMath::Sqrt(TMath::Power(particlecand->getGeantxVertex(),2)+TMath::Power(particlecand->getGeantyVertex(),2)));
+		if(particlecandID==14)//proton
+		  {
+		    hHProtonThetaP->Fill(particlecand->getTheta(),particlecand->getMomentum());
+		  }
+		if(particlecandID==9)//Pi-
+		  {
+		    hHPionThetaP->Fill(particlecand->getTheta(),particlecand->getMomentum());
+		    hHVertex->Fill(particlecand->getGeantzVertex(),TMath::Sqrt(TMath::Power(particlecand->getGeantxVertex(),2)+TMath::Power(particlecand->getGeantyVertex(),2)));
+		  }
+	      }
+	  }
+
+	//Kine
+	if(fCatGeantKine)
+	  {
+	    gknt=fCatGeantKine->getEntries();
+	    for(int i=0;i<gknt;i++)
+	      {
+		hkine = HCategoryManager::getObject(hkine, fCatGeantKine,i);
+		Int_t particleID=hkine->getID();
+		Float_t vertex[3];
+		Int_t trackID=hkine->getTrack();
+		Int_t creationID=hkine->getMechanism();
+		
+		hkine->getVertex(vertex[0],vertex[1],vertex[2]);
+		hPId->Fill(particleID);
+		hFTNumber->Fill(trackID);
+		hFCreationNo->Fill(creationID);
+		
+		if(particleID==14)//proton
+		  {
+		    hProtonTheta->Fill(hkine->getThetaDeg());
+		    hKineProtonThetaP->Fill(hkine->getThetaDeg(),hkine->getTotalMomentum());
+		    hKineVertexZRproton->Fill(vertex[2],TMath::Sqrt(TMath::Power(vertex[1],2)+TMath::Power(vertex[0],2)));
+		  }
+		if(particleID==9)//Pi-
+		  {
+		    hPionTheta->Fill(hkine->getThetaDeg());
+		    hKinePionThetaP->Fill(hkine->getThetaDeg(),hkine->getTotalMomentum());
+		    hKineVertexZRpion->Fill(vertex[2],TMath::Sqrt(TMath::Power(vertex[1],2)+TMath::Power(vertex[0],2)));
+		  }
+		if(particleID==11)
+		  {
+		     hKineVertexZRkaon->Fill(vertex[2],TMath::Sqrt(TMath::Power(vertex[1],2)+TMath::Power(vertex[0],2)));
+		  }		
+		if(creationID==0)
+		  {
+		    hFZVertexAll->Fill(vertex[2]);
+		    hFparticleID->Fill(particleID);
+		  }		
+	      }
+	  }
+
+	
+	//all possible tracks' combinations from HADES and FW
+	for(int j=0;j<vcnt;j++)
+	  {
+	    fwdetstrawvec=HCategoryManager::getObject(fwdetstrawvec, fCatVectorCandSim, j);
+	    Int_t vectorcandID=-1;
+	    Int_t vectorcandTID=fwdetstrawvec->getTrack();
+	    Int_t gknt = fCatGeantKine->getEntries();
+	    Int_t vectorcand_creationID=-1;
+	    HGeomVector vectorcandVertexKine;
+	   
+	    for(int k=0;k<gknt;k++)
+	      {
+		hkine = HCategoryManager::getObject(hkine, fCatGeantKine,k);
+		if(vectorcandTID==hkine->getTrack())
+		  {
+		    vectorcandID=hkine->getID();
+		    hkine->getVertex(vectorcandVertexKine);
+		    vectorcand_creationID=hkine->getMechanism();
+		    break;
+		  }
+	      }
+	    hPrimVecCreationID->Fill(vectorcand_creationID);
+	    if(vectorcand_creationID==0)
+	      hPrimVecID->Fill(vectorcandID);
+	    
+	    for(int i=0;i<pcnt;i++)
+	      {			
+		particlecand = HCategoryManager::getObject(particlecand, fCatParticleCandSim,i);
+		Int_t hades_ID=particlecand->getGeantPID();
+		Int_t particlecand_creationID=particlecand->getGeantParentTrackNum();
+		hPrimParParentTrNo->Fill(particlecand_creationID);
+		if(particlecand_creationID==0)
+		  hPrimParID->Fill(hades_ID);
+		HGeomVector particlecandVertexKine;
+		particlecandVertexKine.setX(particlecand->getGeantxVertex());
+		particlecandVertexKine.setY(particlecand->getGeantyVertex());
+		particlecandVertexKine.setZ(particlecand->getGeantzVertex());
+		
+		HGeomVector base_FW;
+		base_FW.setX(fwdetstrawvec->getX());
+		base_FW.setY(fwdetstrawvec->getY());
+		base_FW.setZ(fwdetstrawvec->getZ());
+		HGeomVector dir_FW;
+		dir_FW.setX(fwdetstrawvec->getTx());
+		dir_FW.setY(fwdetstrawvec->getTy());
+		dir_FW.setZ(1);//konwencja, tak jest ustawione w fwdetstrawvec
+		
+		HGeomVector base_H;
+		HGeomVector dir_H;
+		particle_tool.calcSegVector(particlecand->getZ(),particlecand->getR(),TMath::DegToRad()*particlecand->getPhi(),TMath::DegToRad()*particlecand->getTheta(),base_H,dir_H);
+		double distance=particle_tool.calculateMinimumDistance(base_FW,dir_FW,base_H,dir_H);
+		hDistanceAll->Fill(distance);
+		HGeomVector vertex;
+		vertex=particle_tool.calcVertexAnalytical(base_FW,dir_FW,base_H,dir_H);
+		//hVerZRpionHKineHADES->Fill(particlecandVertexKine.getZ(),TMath::Sqrt(TMath::Power(particlecandVertexKine.getX(),2)+TMath::Power(particlecandVertexKine.getY(),2)));
+		//distance cut
+		if(distance<1/* && vertex.getZ()>1*/)
+		  {
+		    hDistanceCut->Fill(distance);
+		    hVerZ->Fill(vertex.getZ());
+		    hVerZR->Fill(vertex.getZ(),TMath::Sqrt(TMath::Power(vertex.getX(),2)+TMath::Power(vertex.getY(),2)));
+		    if(hades_ID==9)//only Pi- in Hades
+		      {
+		      hVerZRpionH->Fill(vertex.getZ(),TMath::Sqrt(TMath::Power(vertex.getX(),2)+TMath::Power(vertex.getY(),2)));
+		      hVerZRpionHKineFW->Fill(vectorcandVertexKine.getZ(),TMath::Sqrt(TMath::Power(vectorcandVertexKine.getX(),2)+TMath::Power(vectorcandVertexKine.getY(),2)));
+		      hVerZRpionHKineHADES->Fill(particlecandVertexKine.getZ(),TMath::Sqrt(TMath::Power(particlecandVertexKine.getX(),2)+TMath::Power(particlecandVertexKine.getY(),2)));
+		      }
+
+		    fwdetstrawvec->calc4vectorProperties(938);
+		    //particlecand->calc4vectorProperties(140);
+		    TLorentzVector sum_mass = *fwdetstrawvec + *particlecand;		    
+		    if(particlecand_creationID==0 && vectorcand_creationID==0)//particles from primary vertex
+		      {
+			hPrimVertexZ->Fill(vertex.getZ());
+			//mass resolutions for detectors
+		
+		     }
+		    
+
+		    
+		    //  sum_mass.SetPxPyPzE(fwdetstrawvec->Px()+particlecand->Px(),fwdetstrawvec->Py()+particlecand->Py(),fwdetstrawvec->Pz()+particlecand->Pz(),fwdetstrawvec->E()+particlecand->E());
+		    hMasSum->Fill(sum_mass.M());
+		    if(sum_mass.M()>1070 && sum_mass.M()<1100)
+		      {
+			hDistanceMassCut->Fill(distance);
+			hVerZmassCut->Fill(vertex.getZ());
+		      }
+		  }
+	      }
+	  }
+	
+    } // end eventloop
+	//***********************************************************************************
+	
+    	
+
+
+
+
+    //draw all
+    cFirstCut->Divide(2,2);
+    cFirstCut->cd(1);
+    hFTNumber->Draw();
+    cFirstCut->cd(2);
+    hFZVertexAll->Draw();
+    cFirstCut->cd(3);
+    hFCreationNo->Draw();
+    cFirstCut->cd(4);
+    hFparticleID->Draw();
+    
+    cMomentumDistr->Divide(2,2);
+    cMomentumDistr->cd(1);
+    hMomPhiFW->Draw();
+    cMomentumDistr->cd(2);
+    hMomThetaFW->Draw();
+    cMomentumDistr->cd(3);
+    hMomPhiH->Draw();
+    cMomentumDistr->cd(4);
+    hMomThetaH->Draw();
+
+    cDistance->Divide(2,2);
+    cDistance->cd(1);
+    hDistanceAll->Draw();
+    cDistance->cd(2);
+    hDistanceCut->Draw();
+    cDistance->cd(3);
+    hDistanceMassCut->Draw();
+    
+    cVertex->Divide(2,3);
+    cVertex->cd(1);
+    hVerZ->Draw();
+    cVertex->cd(2);
+    hVerZmassCut->Draw();
+    cVertex->cd(3);
+    hVerZR->Draw("COLZ");
+    cVertex->cd(4);
+    hVerZRpionH->Draw("COLZ");
+    cVertex->cd(5);
+    hVerZRpionHKineFW->Draw("COLZ");
+    cVertex->cd(6);
+    hVerZRpionHKineHADES->Draw("COLZ");
+
+    cMass->cd();
+    hMasSum->Draw();
+
+    cKine->Divide(2,4);
+    cKine->SetLogz();
+    cKine->cd(1);
+    hPionTheta->Draw();
+    cKine->cd(2);
+    hProtonTheta->Draw();
+    cKine->cd(3);
+    hPId->Draw();
+    cKine->cd(4);
+    hKineVertexZRproton->Draw("COLZ");
+    cKine->cd(5);
+    hKinePionThetaP->Draw("COLZ");
+    cKine->cd(6);
+    hKineProtonThetaP->Draw("COLZ");
+    cKine->cd(7);
+    hKineVertexZRpion->Draw("COLZ");
+    cKine->cd(8);
+    hKineVertexZRkaon->Draw("COLZ");
+
+    cHADES->Divide(2,2);
+    cHADES->SetLogz();
+    cHADES->cd(1);
+    hHPId->Draw();
+    cHADES->cd(3);
+    hHPionThetaP->Draw("COLZ");
+    cHADES->cd(4);
+    hHProtonThetaP->Draw("COLZ");
+    cHADES->cd(2);
+    hHVertex->Draw("COLZ");
+
+    cFW->Divide(2,2);
+    cFW->cd(1);
+    hFWPId->Draw();
+    cFW->cd(2);
+    hFWProtonTheta->Draw();
+    cFW->cd(3);
+    hFWPionThetaP->Draw("COLZ");
+    cFW->cd(4);
+    hFWProtonThetaP->Draw("COLZ");
+
+    cComp->Draw();
+    cComp->Divide(2,2);
+    cComp->cd(1);
+    hKineVertexZRpion->Draw("COLZ");
+    hKineVertexZRpion->SetAxisRange(0,500,"X");
+    hKineVertexZRpion->SetAxisRange(0,400,"Y");
+    cComp->cd(2);
+    hHVertex->Draw("COLZ");
+    hHVertex->SetAxisRange(0,500,"X");
+    hHVertex->SetAxisRange(0,400,"Y");
+    cComp->cd(3);
+    TH2* hHVertex_rebin=hHVertex->Rebin2D(10,10,"hHVertex_rebin");
+    TH2* hKineVertexZRpion_rebin=hKineVertexZRpion->Rebin2D(10,10,"hKineVertexZRpion_rebin");
+    hHVertex_rebin->Divide(hKineVertexZRpion_rebin);
+    hHVertex_rebin->SetName("Pions recostruction efficiency");
+    hHVertex_rebin->Draw("COLZ");
+    hHVertex_rebin->SetAxisRange(0,500,"X");
+    hHVertex_rebin->SetAxisRange(0,400,"Y");
+
+    cDistancePrimary->Draw();
+    cDistancePrimary->Divide(2,3);
+    cDistancePrimary->cd(1);
+    hPrimParParentTrNo->Draw();
+    cDistancePrimary->cd(2);
+    hPrimVecCreationID->Draw();
+    cDistancePrimary->cd(3);
+    hPrimVecID->Draw();
+    cDistancePrimary->cd(4);
+    hPrimParID->Draw();
+    cDistancePrimary->cd(5);
+    hPrimVertexZ->Draw();
+
+    cKineMass->Divide(2,2);
+    cKineMass->cd(1);
+    hKMHres->Draw();
+    cKineMass->cd(2);
+    hKMFWres->Draw();
+    cKineMass->cd(3);
+    hKMFWresAll->Draw();
+    
+    //save all
+    cMomentumDistr->Write();
+    cDistance->Write();
+    cVertex->Write();
+    cMass->Write();
+    cKine->Write();
+    cFW->Write();
+    cHADES->Write();
+    cComp->Write();
+    cFirstCut->Write();
+    cDistancePrimary->Write();
+    cKineMass->Write();
+
+    output_file->Close();
+    cout << "writing root tree done" << endl;
+
+    timer.Stop();
+    timer.Print();
+
+    return 0;
+}
